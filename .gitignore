@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+node_modules/
 
 # Env
 .env
@@ -17,3 +18,6 @@ wheels/
 
 # Ruff
 .ruff_cache/
+
+# Database
+bot.db

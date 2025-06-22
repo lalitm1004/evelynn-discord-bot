@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String             @id
+  ///
+  guildProfiles GuildUserProfile[]
+
+  @@map("user")
+}
+
+model Guild {
+  id           String             @id
+  prefix       String
+  r34Enabled   Boolean            @default(false) @map("r34_enabled")
+  createdAt    DateTime           @map("created_at")
+  ///
+  userProfiles GuildUserProfile[]
+
+  @@map("guild")
+}
+
+model GuildUserProfile {
+  id            String             @id
+  guildId       String             @map("guild_id")
+  userId        String             @map("user_id")
+  createdAt     DateTime           @map("created_at")
+  ///
+  commandCounts UserCommandCount[]
+  r34Profiles   R34UserProfile[]
+  r34Blacklists R34UserBlacklist[]
+  r34Bookmarks  R34UserBookmarks[]
+  guild         Guild              @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@map("guild_user_profile")
+}
+
+model UserCommandCount {
+  userId   String           @id @map("user_id")
+  category CommandCategory
+  count    Int
+  ///
+  user     GuildUserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_command_count")
+}
+
+enum CommandCategory {
+  FUN
+  RULE34
+}
+
+// Rule34
+model R34UserProfile {
+  userId           String           @id @map("user_id")
+  blacklistEnabled Boolean          @default(true) @map("blacklist_enabled")
+  ///
+  user             GuildUserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("r34_user_profile")
+}
+
+model R34UserBlacklist {
+  userId String           @map("user_id")
+  term   String
+  ///
+  user   GuildUserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, term])
+  @@map("r34_user_blacklist")
+}
+
+model R34UserBookmarks {
+  userId    String           @map("user_id")
+  postId    String           @map("post_id")
+  createdAt DateTime         @map("created_at")
+  ///
+  user      GuildUserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+  @@map("r34_user_bookmarks")
+}

@@ -4,8 +4,11 @@ from discord.ext import commands
 from pathlib import Path
 
 from env import EnvConfig
+from db.database import init_db
+
 
 environment = EnvConfig.from_env()
+init_db()
 
 client = commands.Bot(
     command_prefix=">>", help_command=None, intents=discord.Intents.all()
