@@ -53,7 +53,7 @@ class R34UserProfile(SQLModel, table=True):
 
 class R34UserBlacklist(SQLModel, table=True):
     user_id: UUID = Field(primary_key=True, foreign_key="guilduserprofile.id")
-    term: str = Field(primary_key=True)
+    tag: str = Field(primary_key=True)
 
 
 class R34UserBookmarks(SQLModel, table=True):

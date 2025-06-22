@@ -20,12 +20,13 @@ client.before_invoke(register_hook())
 
 @client.event
 async def on_ready() -> None:
-    channel = await client.fetch_channel(environment.DEBUG_CHANNEL_ID)
+    if environment.DEBUG_CHANNEL_ID:
+        channel = await client.fetch_channel(environment.DEBUG_CHANNEL_ID)
 
-    if isinstance(channel, discord.TextChannel):
-        await channel.send(f"## Logged in as {client.user}")
-    else:
-        raise TypeError("DEBUG_CHANNEL_ID does not point to a text channel")
+        if isinstance(channel, discord.TextChannel):
+            await channel.send(f"## Logged in as {client.user}")
+        else:
+            raise TypeError("DEBUG_CHANNEL_ID does not point to a text channel")
 
     print(f"Logged in as {client.user}")
 
