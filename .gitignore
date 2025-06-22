@@ -14,3 +14,6 @@ wheels/
 .env.*
 !.env.example
 !.env.test
+
+# Ruff
+.ruff_cache/
