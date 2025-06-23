@@ -51,7 +51,9 @@ class Rule34Cog(commands.Cog):
             )
         )
 
-    @rule34_group.group(aliases=["blist"])
+    @rule34_group.group(
+        name="blacklist", aliases=["blist"], invoke_without_command=True
+    )
     async def blacklist_group(self, ctx: commands.Context) -> None:
         await ctx.reply(
             Fmt.info(
