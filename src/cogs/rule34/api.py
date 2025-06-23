@@ -2,7 +2,10 @@ import random
 import requests
 from cachetools import TTLCache
 from dataclasses import dataclass
-from typing import Final, List, Optional, Tuple
+from typing import Any, Dict, Final, List, Optional
+from urllib.parse import quote_plus
+
+from cogs.rule34.tag_group import TagGroup
 
 
 @dataclass
@@ -12,7 +15,7 @@ class Rule34Post:
     file_url: str
 
     @classmethod
-    def from_dict(cls, post: dict) -> "Rule34Post":
+    def from_dict(cls, post: Dict[str, Any]) -> "Rule34Post":
         id_val = str(post.get("id", "unknown"))
         tags_raw = post.get("tags", "")
         file_url_val = str(post.get("file_url", ""))
@@ -21,72 +24,48 @@ class Rule34Post:
 
         return cls(id=id_val, tags=tags_list, file_url=file_url_val)
 
-    def get_output_string(self) -> str:
+    def get_output_string(self, max_tag_length: int = 1500) -> str:
         tag_str = " ".join(self.tags)
-        if len(tag_str) >= 1500:
-            tag_str = tag_str[:1501] + "..."
+        if len(tag_str) >= max_tag_length:
+            tag_str = tag_str[: max_tag_length - 3] + "..."
+
         output = (
             f"`Post from https://rule34.xxx`\n\n"
-            f"`ID` - `{self.id}`\n\n"
-            f"`Tags` : `{tag_str}`\n\n"
-            f"`URL` : {self.file_url}"
+            f"`ID`: `{self.id}`\n\n"
+            f"`Tags`: `{tag_str}`\n\n"
+            f"`URL`: {self.file_url}"
         )
         return output
 
+    def __post_init__(self):
+        if not self.id:
+            raise ValueError("Post ID cannot be empty")
+        if not self.file_url:
+            raise ValueError("Post file URL cannot be empty")
 
-@dataclass
-class TagGroup:
-    whitelisted: List[str]
-    blacklisted: List[str]
 
-    @classmethod
-    def from_list(cls, whitelisted: List[str], blacklisted: List[str]) -> "TagGroup":
-        whitelisted = [tag.replace("-", "") for tag in whitelisted]
-        blacklisted = [tag.replace("-", "") for tag in blacklisted]
-
-        return cls(whitelisted, blacklisted)
-
-    @classmethod
-    def from_string(cls, tags: str) -> "TagGroup":
-        tag_list = tags.strip().lower().replace(",", " ").split(" ")
-        tag_list = [tag for tag in tag_list if tag.strip()]
-
-        blacklisted = sorted([tag[1:] for tag in tag_list if tag.startswith("-")])
-        whitelisted = sorted([tag for tag in tag_list if not tag.startswith("-")])
-
-        return cls(whitelisted, blacklisted)
-
-    def to_string(self) -> str:
-        all_tags = self.whitelisted + [f"-{tag}" for tag in self.blacklisted]
-        return " ".join(all_tags)
-
-    def append_to_whitelist(self, tags: List[str]) -> None:
-        normalized = {
-            tag.strip().lower().replace("-", "") for tag in tags if tag.strip()
-        }
-        self.whitelisted = sorted(set(self.whitelisted).union(normalized))
-
-    def append_to_blacklist(self, tags: List[str]) -> None:
-        normalized = {
-            tag.strip().lower().replace("-", "") for tag in tags if tag.strip()
-        }
-        self.blacklisted = sorted(set(self.blacklisted).union(normalized))
-
-    def get_conflicting_tags(self) -> List[str]:
-        whitelist_set = set(self.whitelisted)
-        blacklist_set = set(self.blacklisted)
-        conflicts = whitelist_set.intersection(blacklist_set)
-        return sorted(conflicts)
+class Rule34APIError(Exception):
+    pass
 
 
 class Rule34API:
     API_URL: Final[str] = (
         "https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1"
     )
+    DEFAULT_LIMIT: Final[int] = 1000
+    DEFAULT_TIMEOUT: Final[int] = 30
 
-    def __init__(self) -> None:
-        # self.cache: Dict[str, List[Rule34Post]] = {}
-        self.cache: TTLCache[str, List[Rule34Post]] = TTLCache(maxsize=1000, ttl=3600)
+    def __init__(
+        self,
+        cache_size: int = 1000,
+        cache_ttl: int = 3600,
+        timeout: int = DEFAULT_TIMEOUT,
+    ) -> None:
+        self.cache: TTLCache[str, List[Rule34Post]] = TTLCache(
+            maxsize=cache_size, ttl=cache_ttl
+        )
+        self.timeout = timeout
+        self.session = requests.Session()
 
     def _retrieve_from_cache(self, key: str, pop: bool = True) -> Optional[Rule34Post]:
         posts = self.cache.get(key)
@@ -100,43 +79,80 @@ class Rule34API:
         if pop:
             posts.pop(index)
 
+            if not posts:
+                self.cache.pop(key, None)
+
         return post
 
     def _push_to_cache(self, key: str, posts: List[Rule34Post]) -> None:
-        self.cache[key] = posts
+        if posts:
+            self.cache[key] = posts
 
-    def search(self, tags: TagGroup) -> Optional[Rule34Post]:
+    def _make_request(self, url: str) -> List[Any]:
+        try:
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout:
+            raise Rule34APIError("Request timed out")
+        except requests.exceptions.ConnectionError:
+            raise Rule34APIError("Connection error occurred")
+        except requests.exceptions.HTTPError as e:
+            raise Rule34APIError(f"HTTP error: {e.response.status_code}")
+        except requests.exceptions.RequestException as e:
+            raise Rule34APIError(f"Request failed: {str(e)}")
+        except ValueError as e:
+            raise Rule34APIError(f"Invalid JSON response: {str(e)}")
+
+    def search(
+        self, tags: TagGroup, limit: int = DEFAULT_LIMIT, prefer_whitelist: bool = True
+    ) -> Optional[Rule34Post]:
+        if not tags.is_valid():
+            tags.resolve_conflicts(prefer_whitelist)
+
         query = tags.to_string()
+        key = tags.to_key()
 
-        if self._retrieve_from_cache(query, False) is None:
+        cached_post = self._retrieve_from_cache(key, False)
+        if cached_post is None:
             try:
-                tag_query_string = query.replace(" ", "+")
-                response = requests.get(
-                    f"{self.API_URL}&tags={tag_query_string}&limit=1000"
-                )
-                response.raise_for_status()
-                json_response = response.json()
-            except (requests.RequestException, ValueError):
+                tag_query_string = quote_plus(query)
+                url = f"{self.API_URL}&tags={tag_query_string}&limit={limit}"
+
+                json_response = self._make_request(url)
+
+                if not isinstance(json_response, list):
+                    return None
+
+                posts: List[Rule34Post] = []
+                for post_data in json_response:
+                    try:
+                        if not isinstance(post_data, dict):
+                            raise TypeError
+
+                        post = Rule34Post.from_dict(post_data)
+                        posts.append(post)
+                    except (ValueError, TypeError) as e:
+                        continue
+
+                if not posts:
+                    return None
+
+                self._push_to_cache(key, posts)
+            except Rule34APIError as e:
                 return None
 
-            posts: List[Rule34Post] = [
-                Rule34Post.from_dict(post)
-                for post in json_response
-                if isinstance(post, dict)
-            ]
-
-            self._push_to_cache(query, posts)
-
-        return self._retrieve_from_cache(query, True)
+        return self._retrieve_from_cache(key, True)
 
     def latest(self) -> Optional[Rule34Post]:
         try:
-            response = requests.get(f"{self.API_URL}&limit=1")
-            response.raise_for_status()
-            json_data = response.json()
-            post_data = (
-                json_data[0] if json_data and isinstance(json_data[0], dict) else None
-            )
-            return Rule34Post.from_dict(post_data) if post_data else None
-        except (requests.RequestException, ValueError, IndexError):
+            url = f"{self.API_URL}&limit=1"
+            json_data = self._make_request(url)
+
+            if not isinstance(json_data, list):
+                return None
+
+            post_data: Dict[str, Any] = json_data[0]
+            return Rule34Post.from_dict(post_data)
+        except (Rule34APIError, ValueError, IndexError) as e:
             return None

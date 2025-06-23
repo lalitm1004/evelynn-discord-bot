@@ -45,6 +45,15 @@ class UserCommandCount(SQLModel, table=True):
     category: CommandCategory
     count: int
 
+    __table_args__ = (
+        Index(
+            "user_command_count_user_id_category_key",
+            "user_id",
+            "category",
+            unique=True
+        )
+    )
+
 
 class R34UserProfile(SQLModel, table=True):
     user_id: UUID = Field(primary_key=True, foreign_key="guilduserprofile.id")
