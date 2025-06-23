@@ -41,11 +41,23 @@ class Rule34Cog(commands.Cog):
     @commands.guild_only()
     @commands.is_nsfw()
     async def rule34_group(self, ctx: commands.Context) -> None:
-        pass
+        await ctx.reply(
+            Fmt.info(
+                "Available subcommands\n"
+                "\t+ blacklist | blist\n"
+                "\t+ latest\n"
+                "\t+ random\n"
+                "\t+ search <tags>\n"
+            )
+        )
 
     @rule34_group.group(aliases=["blist"])
     async def blacklist_group(self, ctx: commands.Context) -> None:
-        pass
+        await ctx.reply(
+            Fmt.info(
+                "Available subcommands\n\t+ view\n\t+ add\n\t+ remove\n\t+ toggle\n"
+            )
+        )
 
     @blacklist_group.command()
     async def view(self, ctx: commands.Context) -> None:
@@ -192,6 +204,14 @@ class Rule34Cog(commands.Cog):
             await ctx.reply(Fmt.warning(str(error)))
         elif isinstance(error, commands.NoPrivateMessage):
             await ctx.reply(Fmt.warning("This command can only be used in guilds"))
+        else:
+            await ctx.reply(Fmt.error("An unexpected error occurred"))
+            raise error
+
+    @search.error
+    async def search_error(self, ctx: commands.Context, error) -> None:
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.reply(Fmt.error("Missing Required Arguments: tags"))
         else:
             await ctx.reply(Fmt.error("An unexpected error occurred"))
             raise error

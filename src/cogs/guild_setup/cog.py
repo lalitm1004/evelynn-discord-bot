@@ -17,13 +17,13 @@ class GuildSetupCog(commands.Cog):
     @commands.group(name="guild", invoke_without_command=True)
     @commands.guild_only()
     async def guild_group(self, ctx: commands.Context) -> None:
-        await ctx.reply(Fmt.info("Available subcommands\n+ enable\n+ disable\n"))
+        await ctx.reply(Fmt.info("Available subcommands\n\t+ enable\n\t+ disable\n"))
 
     @guild_group.group(name="enable", invoke_without_command=True)
     async def guild_enable(self, ctx: commands.Context) -> None:
-        await ctx.reply(Fmt.info("Available subcommands\n+ r34\n"))
+        await ctx.reply(Fmt.info("Available subcommands\n\t+ r34\n"))
 
-    @guild_enable.command(name="r34")
+    @guild_enable.command(name="r34", aliases=["rule34"])
     @commands.has_permissions(administrator=True)
     async def enable_r34(self, ctx: commands.Context) -> None:
         guild_id, _ = GenUtils.extract_guild_and_user_id(ctx)
@@ -44,7 +44,7 @@ class GuildSetupCog(commands.Cog):
     async def guild_disable(self, ctx: commands.Context) -> None:
         await ctx.reply(Fmt.info("Available subcommands\n+ r34\n"))
 
-    @guild_disable.command(name="r34")
+    @guild_disable.command(name="r34", aliases=["rule34"])
     @commands.has_permissions(administrator=True)
     async def disable_r34(self, ctx: commands.Context) -> None:
         guild_id, _ = GenUtils.extract_guild_and_user_id(ctx)
