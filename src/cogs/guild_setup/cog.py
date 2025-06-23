@@ -3,8 +3,8 @@ from discord.ext import commands
 
 from typing import Optional
 
-from db.engine import get_session
-from db.models import Guild
+from db.utils import DatabaseUtils as DBUtils
+from utils.formatter import Formatter as Fmt
 
 
 class GuildSetupCog(commands.Cog):
@@ -13,64 +13,60 @@ class GuildSetupCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild) -> None:
-        with get_session() as session:
-            existing = session.get(Guild, str(guild.id))
+        await DBUtils.create_guild(guild_id=str(guild.id))
 
-            if existing is None:
-                db_guild = Guild(id=str(guild.id))
-
-                session.add(db_guild)
-                session.commit()
-
-    @commands.command(name="enable_r34")
+    @commands.group(name="guild", invoke_without_command=True)
     @commands.guild_only()
+    async def guild_group(self, ctx: commands.Context) -> None:
+        await ctx.send(Fmt.info("Available subcommands\n+ enable\n+ disable\n"))
+
+    @guild_group.group(name="enable", invoke_without_command=True)
+    async def guild_enable(self, ctx: commands.Context) -> None:
+        await ctx.send(Fmt.info("Available subcommands\n+ r34\n"))
+
+    @guild_enable.command(name="r34")
     @commands.has_permissions(administrator=True)
     async def enable_r34(self, ctx: commands.Context) -> None:
         guild: Optional[discord.Guild] = ctx.guild
-        assert guild is not None, "`guild_only` command"
+        assert guild is not None, "Command can only be used in guilds"
+
         guild_id = str(guild.id)
 
-        with get_session() as session:
-            db_guild = session.get(Guild, guild_id)
-            assert db_guild is not None, (
-                "`before_invoke` hook should create `guild_profile`"
+        db_guild = await DBUtils.fetch_or_create_guild(guild_id)
+
+        if db_guild.r34_enabled:
+            await ctx.send(
+                Fmt.warning("Feature_RULE34 is already ENABLED on this guild")
             )
+            return
 
-            if db_guild.r34_enabled:
-                await ctx.send("`[WARNING] Rule34 is already enabled for this guild`")
-                return
+        db_guild = await DBUtils.update_guild(guild_id, r34_enabled=True)
 
-            db_guild.r34_enabled = True
+        await ctx.send(Fmt.success("Feature_RULE34 has been ENABLED on this guild"))
 
-            session.add(db_guild)
-            session.commit()
+    @guild_group.group(name="disable", invoke_without_command=True)
+    async def guild_disable(self, ctx: commands.Context) -> None:
+        await ctx.send(Fmt.info("Available subcommands\n+ r34\n"))
 
-        await ctx.send("`Rule34 has been ENABLED for this guild`")
-
-    @commands.command(name="disable_r34")
-    @commands.guild_only()
+    @guild_disable.command(name="r34")
     @commands.has_permissions(administrator=True)
     async def disable_r34(self, ctx: commands.Context) -> None:
         guild: Optional[discord.Guild] = ctx.guild
-        assert guild is not None, "`guild_only` command"
+        assert guild is not None, "Command can only be used in guilds"
+
         guild_id = str(guild.id)
 
-        with get_session() as session:
-            db_guild = session.get(Guild, guild_id)
-            assert db_guild is not None, (
-                "`before_invoke` hook should create `guild_profile`"
+        db_guild = await DBUtils.fetch_or_create_guild(guild_id)
+
+        if not db_guild.r34_enabled:
+            await ctx.send(
+                Fmt.warning("Feature_RULE34 is already DISABLED on this guild")
             )
+            return
 
-            if db_guild.r34_enabled:
-                await ctx.send("`[WARNING] Rule34 is already enabled for this guild`")
-                return
+        db_guild = await DBUtils.update_guild(guild_id, r34_enabled=False)
 
-            db_guild.r34_enabled = False
-
-            session.add(db_guild)
-            session.commit()
-
-        await ctx.send("`Rule34 has been DISABLED for this guild`")
+        await ctx.send(Fmt.success("Feature_RULE34 has been DISABLED on this guild"))
 
     @enable_r34.error
     @disable_r34.error
@@ -79,12 +75,12 @@ class GuildSetupCog(commands.Cog):
     ) -> None:
         if isinstance(error, commands.MissingPermissions):
             await ctx.send(
-                "`[ERROR] You must be a server administrator to use this command`"
+                Fmt.warning("You must be a server administrator to use this command")
             )
         elif isinstance(error, commands.NoPrivateMessage):
-            await ctx.send("`[ERROR] This command can only be used in servers`")
+            await ctx.send(Fmt.warning("This command can only be used in servers"))
         else:
-            await ctx.send("`[ERROR] An unexpected error occurred`")
+            await ctx.send(Fmt.error("An unexpected error occurred"))
             raise error
 
 
