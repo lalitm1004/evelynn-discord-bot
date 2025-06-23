@@ -19,8 +19,8 @@ class Rule34Cog(commands.Cog):
     async def cog_before_invoke(self, ctx: commands.Context) -> None:
         guild: Optional[discord.Guild] = ctx.guild
         if guild is not None:
-            with get_session() as session:
-                guild_config = session.get(Guild, str(guild.id))
+            async with get_session() as session:
+                guild_config = await session.get(Guild, str(guild.id))
                 if guild_config is None or not guild_config.r34_enabled:
                     raise commands.CheckFailure(
                         "[ERROR] Rule34 is disabled for this guild."

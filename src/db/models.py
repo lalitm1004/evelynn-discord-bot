@@ -50,8 +50,8 @@ class UserCommandCount(SQLModel, table=True):
             "user_command_count_user_id_category_key",
             "user_id",
             "category",
-            unique=True
-        )
+            unique=True,
+        ),
     )
 
 

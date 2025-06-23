@@ -11,26 +11,26 @@ def register_hook():
         author_id = str(ctx.author.id)
         guild_id = str(ctx.guild.id) if ctx.guild else None
 
-        with get_session() as session:
-            user = session.get(User, author_id)
+        async with get_session() as session:
+            user = await session.get(User, author_id)
 
             if user is None:
                 user = User(id=author_id)
                 session.add(user)
 
             if guild_id is not None:
-                db_guild = session.get(Guild, guild_id)
+                db_guild = await session.get(Guild, guild_id)
 
                 if db_guild is None:
                     session.add(Guild(id=guild_id))
 
-                result = session.exec(
+                result = await session.execute(
                     select(GuildUserProfile).where(
                         GuildUserProfile.user_id == author_id,
                         GuildUserProfile.guild_id == guild_id,
                     )
                 )
-                profile = result.first()
+                profile = result.scalar_one_or_none()
 
                 if profile is None:
                     profile = GuildUserProfile(
@@ -40,6 +40,6 @@ def register_hook():
                     )
                     session.add(profile)
 
-                session.commit()
+                await session.commit()
 
     return before_command
