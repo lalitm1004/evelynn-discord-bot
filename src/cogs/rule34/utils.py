@@ -10,7 +10,7 @@ from db.models import (
     R34UserBookmarks,
     UserCommandCount,
 )
-from db.database import get_session
+from db.engine import get_session
 
 
 class Rule34DatabaseUtils:

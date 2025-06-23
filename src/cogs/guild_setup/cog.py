@@ -3,7 +3,7 @@ from discord.ext import commands
 
 from typing import Optional
 
-from db.database import get_session
+from db.engine import get_session
 from db.models import Guild
 
 

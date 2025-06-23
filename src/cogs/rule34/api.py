@@ -57,7 +57,7 @@ class Rule34API:
 
     def __init__(
         self,
-        cache_size: int = 1000,
+        cache_size: int = 1024,
         cache_ttl: int = 3600,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:

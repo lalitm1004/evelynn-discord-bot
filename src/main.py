@@ -2,10 +2,11 @@ import discord
 from discord.ext import commands
 
 import asyncio
+from math import ceil
 from pathlib import Path
 
+from db.engine import init_db
 from env import EnvConfig
-from db.database import init_db
 from hooks.register import register_hook
 
 environment = EnvConfig.from_env()
@@ -35,7 +36,9 @@ async def setup_bot() -> commands.Bot:
     # TEST command
     @client.command()
     async def ping(ctx: commands.Context) -> None:
-        await ctx.message.channel.send("pong")
+        await ctx.message.channel.send(
+            f"pong!\n> `Client Latency > {ceil(client.latency * 100)}ms`"
+        )
 
     # load up cogs
     cogs_path = Path("src/cogs")

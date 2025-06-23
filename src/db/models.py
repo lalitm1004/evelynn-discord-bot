@@ -12,6 +12,7 @@ def now() -> datetime:
 class CommandCategory(str, Enum):
     FUN = "fun"
     RULE34 = "rule34"
+    MISC = "misc"
 
 
 class User(SQLModel, table=True):
@@ -43,7 +44,7 @@ class GuildUserProfile(SQLModel, table=True):
 class UserCommandCount(SQLModel, table=True):
     user_id: UUID = Field(primary_key=True, foreign_key="guilduserprofile.id")
     category: CommandCategory
-    count: int
+    count: int = Field(default=0)
 
     __table_args__ = (
         Index(

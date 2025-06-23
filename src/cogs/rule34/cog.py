@@ -3,7 +3,7 @@ from discord.ext import commands
 
 from typing import Final, Optional, List
 
-from db.database import get_session
+from db.engine import get_session
 from db.models import Guild
 from cogs.rule34.api import Rule34API, TagGroup
 from cogs.rule34.utils import Rule34DatabaseUtils as DBUtils
