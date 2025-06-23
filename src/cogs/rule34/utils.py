@@ -1,196 +1,261 @@
-from dataclasses import dataclass
+import asyncio
+from cachetools import TTLCache
 from sqlmodel import select
-from typing import List, Tuple
+from typing import Final, List, Optional, Set
+from uuid import UUID
 
+from db.engine import get_session
 from db.models import (
-    CommandCategory,
-    GuildUserProfile,
     R34UserProfile,
     R34UserBlacklist,
     R34UserBookmarks,
-    UserCommandCount,
 )
-from db.engine import get_session
+from db.utils import DatabaseUtils
 
 
-class Rule34DatabaseUtils:
+class Rule34DatabaseUtils(DatabaseUtils):
+    _r34_profile_cache: Final[TTLCache[UUID, R34UserProfile]] = TTLCache(
+        DatabaseUtils.maxsize, DatabaseUtils.ttl
+    )
+    _r34_profile_cache_lock = asyncio.Lock()
+
+    _blacklist_cache: Final[TTLCache[UUID, Set[str]]] = TTLCache(
+        DatabaseUtils.maxsize, DatabaseUtils.ttl
+    )
+    _blacklist_cache_lock = asyncio.Lock()
+
+    _bookmark_cache: Final[TTLCache[UUID, Set[str]]] = TTLCache(
+        DatabaseUtils.maxsize, DatabaseUtils.ttl
+    )
+    _bookmark_cache_lock = asyncio.Lock()
+
     @staticmethod
-    def fetch_r34_profile(user_id: str, guild_id: str) -> R34UserProfile:
-        with get_session() as session:
-            guild_profile = session.exec(
-                select(GuildUserProfile).where(
-                    GuildUserProfile.user_id == user_id,
-                    GuildUserProfile.guild_id == guild_id,
-                )
-            ).first()
+    async def _get_profile_id(guild_id: str, user_id: str) -> UUID:
+        profile = await DatabaseUtils.fetch_or_create_guild_user_profile(
+            guild_id, user_id
+        )
+        return profile.id
 
-            assert guild_profile is not None, (
-                "`before_invoke` hook should create `GuildUserProfile`"
-            )
+    @staticmethod
+    async def fetch_r34_user_profile(
+        guild_id: str, user_id: str
+    ) -> Optional[R34UserProfile]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
 
-            profile = session.exec(
-                select(R34UserProfile).where(R34UserProfile.user_id == guild_profile.id)
-            ).first()
-
-            if profile:
+        async with Rule34DatabaseUtils._r34_profile_cache_lock:
+            if profile := Rule34DatabaseUtils._r34_profile_cache.get(profile_id):
                 return profile
 
-            new_profile = R34UserProfile(user_id=guild_profile.id)
-            session.add(new_profile)
-            session.commit()
-            session.refresh(new_profile)
-            return new_profile
-
-    @staticmethod
-    def toggle_user_blacklist(user_id: str, guild_id: str) -> bool:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
-            profile.blacklist_enabled = not profile.blacklist_enabled
-            new_state = profile.blacklist_enabled
-            session.add(profile)
-            session.commit()
-        return new_state
-
-    @staticmethod
-    def is_blacklist_enabled(user_id: str, guild_id: str) -> bool:
-        profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
-        return profile.blacklist_enabled
-
-    @staticmethod
-    def push_to_blacklist(user_id: str, guild_id: str, tag: str) -> bool:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
-            existing = session.exec(
-                select(R34UserBlacklist).where(
-                    R34UserBlacklist.user_id == profile.user_id,
-                    R34UserBlacklist.tag == tag,
-                )
-            ).first()
-
-            if existing:
-                return False
-
-            entry = R34UserBlacklist(user_id=profile.user_id, tag=tag)
-            session.add(entry)
-            session.commit()
-
-        return True
-
-    @staticmethod
-    def pop_from_blacklist(user_id: str, guild_id: str, tag: str) -> bool:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
-
-            existing = session.exec(
-                select(R34UserBlacklist).where(
-                    R34UserBlacklist.user_id == profile.user_id,
-                    R34UserBlacklist.tag == tag,
-                )
-            ).first()
-
-            if existing:
-                session.delete(existing)
-                session.commit()
-                return True
-
-        return False
-
-    @staticmethod
-    def fetch_blacklist(user_id: str, guild_id: str) -> List[str]:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
-
-            entries = session.exec(
-                select(R34UserBlacklist.tag).where(
-                    R34UserBlacklist.user_id == profile.user_id
-                )
-            ).all()
-
-            return [e for e in entries]
-
-    @staticmethod
-    def increment_command_count(user_id: str, guild_id: str) -> None:
-        with get_session() as session:
-            profile = session.exec(
-                select(GuildUserProfile).where(
-                    GuildUserProfile.user_id == user_id,
-                    GuildUserProfile.guild_id == guild_id,
-                )
-            ).first()
-
-            assert profile is not None, (
-                "`before_invoke` hook should create `GuildUserProfile`"
+        async with get_session() as session:
+            result = await session.execute(
+                select(R34UserProfile).where(R34UserProfile.user_id == profile_id)
             )
+            profile = result.scalar_one_or_none()
 
-            existing = session.exec(
-                select(UserCommandCount).where(
-                    UserCommandCount.user_id == profile.id,
-                    UserCommandCount.category == CommandCategory.RULE34,
+            if profile:
+                async with Rule34DatabaseUtils._r34_profile_cache_lock:
+                    Rule34DatabaseUtils._r34_profile_cache[profile_id] = profile
+
+            return profile
+
+    @staticmethod
+    async def create_r34_user_profile(guild_id: str, user_id: str) -> R34UserProfile:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
+        profile = R34UserProfile(user_id=profile_id)
+
+        async with get_session() as session:
+            session.add(profile)
+            await session.commit()
+            await session.refresh(profile)
+
+        async with Rule34DatabaseUtils._r34_profile_cache_lock:
+            Rule34DatabaseUtils._r34_profile_cache[profile_id] = profile
+
+        return profile
+
+    @staticmethod
+    async def fetch_or_create_r34_user_profile(
+        guild_id: str, user_id: str
+    ) -> R34UserProfile:
+        return await Rule34DatabaseUtils.fetch_r34_user_profile(
+            guild_id, user_id
+        ) or await Rule34DatabaseUtils.create_r34_user_profile(guild_id, user_id)
+
+    @staticmethod
+    async def update_r34_user_profile(
+        guild_id: str, user_id: str, **kwargs
+    ) -> R34UserProfile:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(R34UserProfile).where(R34UserProfile.user_id == profile_id)
+            )
+            profile = result.scalar_one()
+
+            for key, value in kwargs.items():
+                setattr(profile, key, value)
+
+            session.add(profile)
+            await session.commit()
+            await session.refresh(profile)
+
+        async with Rule34DatabaseUtils._r34_profile_cache_lock:
+            Rule34DatabaseUtils._r34_profile_cache[profile_id] = profile
+
+        return profile
+
+    @staticmethod
+    async def get_blacklist(guild_id: str, user_id: str) -> Set[str]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
+
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            if cached := Rule34DatabaseUtils._blacklist_cache.get(profile_id):
+                return cached
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(R34UserBlacklist.tag).where(
+                    R34UserBlacklist.user_id == profile_id
                 )
-            ).first()
+            )
+            tags = result.scalars().all()
+            tags = set(tags)
 
-            if existing:
-                existing.count += 1
-                session.add(existing)
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            Rule34DatabaseUtils._blacklist_cache[profile_id] = tags
+
+        return tags
+
+    @staticmethod
+    async def add_blacklist_tags(
+        guild_id: str, user_id: str, tags: List[str]
+    ) -> Set[str]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
+
+        existing_tags = await Rule34DatabaseUtils.get_blacklist(guild_id, user_id)
+        to_insert = set(tags) - existing_tags
+        rejected = set(tags) - to_insert
+
+        async with get_session() as session:
+            session.add_all(
+                [R34UserBlacklist(user_id=profile_id, tag=tag) for tag in to_insert]
+            )
+            await session.commit()
+
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            if profile_id in Rule34DatabaseUtils._blacklist_cache:
+                Rule34DatabaseUtils._blacklist_cache[profile_id].update(to_insert)
             else:
-                new_count = UserCommandCount(
-                    user_id=profile.id,
-                    category=CommandCategory.RULE34,
-                    count=1,
+                Rule34DatabaseUtils._blacklist_cache[profile_id] = (
+                    existing_tags | to_insert
                 )
-                session.add(new_count)
 
-            session.commit()
+        return rejected
 
     @staticmethod
-    def push_bookmark(user_id: str, guild_id: str, post_id: str) -> bool:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
+    async def remove_blacklist_tags(
+        guild_id: str, user_id: str, tags: List[str]
+    ) -> Set[str]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
 
-            existing = session.exec(
-                select(R34UserBookmarks).where(
-                    R34UserBookmarks.user_id == profile.user_id,
-                    R34UserBookmarks.post_id == post_id,
+        found_tags = set()
+
+        async with get_session() as session:
+            for tag in tags:
+                result = await session.execute(
+                    select(R34UserBlacklist).where(
+                        (R34UserBlacklist.user_id == profile_id)
+                        & (R34UserBlacklist.tag == tag)
+                    )
                 )
-            ).first()
+                record = result.scalar_one_or_none()
+                if record:
+                    await session.delete(record)
+                    found_tags.add(tag)
 
-            if existing:
-                return False
+            await session.commit()
 
-            bookmark = R34UserBookmarks(user_id=profile.user_id, post_id=post_id)
-            session.add(bookmark)
-            session.commit()
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            if profile_id in Rule34DatabaseUtils._blacklist_cache:
+                Rule34DatabaseUtils._blacklist_cache[profile_id] -= found_tags
 
-        return True
+        rejected = set(tags) - found_tags
+        return rejected
 
     @staticmethod
-    def pop_bookmark(user_id: str, guild_id: str, post_id: str) -> bool:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
+    async def get_bookmarks(guild_id: str, user_id: str) -> Set[str]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
 
-            existing = session.exec(
-                select(R34UserBookmarks).where(
-                    R34UserBookmarks.user_id == profile.user_id,
-                    R34UserBookmarks.post_id == post_id,
-                )
-            ).first()
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            if cached := Rule34DatabaseUtils._bookmark_cache.get(profile_id):
+                return cached
 
-            if existing:
-                session.delete(existing)
-                session.commit()
-                return True
-
-        return False
-
-    @staticmethod
-    def fetch_bookmarks(user_id: str, guild_id: str) -> List[str]:
-        with get_session() as session:
-            profile = Rule34DatabaseUtils.fetch_r34_profile(user_id, guild_id)
-
-            entries = session.exec(
+        async with get_session() as session:
+            result = await session.execute(
                 select(R34UserBookmarks.post_id).where(
-                    R34UserBookmarks.user_id == profile.user_id
+                    R34UserBookmarks.user_id == profile_id
                 )
-            ).all()
+            )
+            post_ids = set(result.scalars().all())
 
-            return [e for e in entries]
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            Rule34DatabaseUtils._bookmark_cache[profile_id] = post_ids
+
+        return post_ids
+
+    @staticmethod
+    async def add_bookmarks(
+        guild_id: str, user_id: str, post_ids: List[str]
+    ) -> Set[str]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
+
+        existing_post_ids = await Rule34DatabaseUtils.get_bookmarks(guild_id, user_id)
+        to_insert = set(post_ids) - existing_post_ids
+        rejected = set(post_ids) - to_insert
+
+        async with get_session() as session:
+            session.add_all(
+                [R34UserBookmarks(user_id=profile_id, post_id=pid) for pid in to_insert]
+            )
+            await session.commit()
+
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            if profile_id in Rule34DatabaseUtils._bookmark_cache:
+                Rule34DatabaseUtils._bookmark_cache[profile_id].update(to_insert)
+            else:
+                Rule34DatabaseUtils._bookmark_cache[profile_id] = (
+                    existing_post_ids | to_insert
+                )
+
+        return rejected
+
+    @staticmethod
+    async def remove_bookmarks(
+        guild_id: str, user_id: str, post_ids: List[str]
+    ) -> Set[str]:
+        profile_id = await Rule34DatabaseUtils._get_profile_id(guild_id, user_id)
+
+        found_post_ids = set()
+
+        async with get_session() as session:
+            for pid in post_ids:
+                result = await session.execute(
+                    select(R34UserBookmarks).where(
+                        (R34UserBookmarks.user_id == profile_id)
+                        & (R34UserBookmarks.post_id == pid)
+                    )
+                )
+                record = result.scalar_one_or_none()
+                if record:
+                    await session.delete(record)
+                    found_post_ids.add(pid)
+
+            await session.commit()
+
+        async with Rule34DatabaseUtils._bookmark_cache_lock:
+            if profile_id in Rule34DatabaseUtils._bookmark_cache:
+                Rule34DatabaseUtils._bookmark_cache[profile_id] -= found_post_ids
+
+        rejected = set(post_ids) - found_post_ids
+        return rejected

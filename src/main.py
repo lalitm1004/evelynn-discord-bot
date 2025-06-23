@@ -4,8 +4,11 @@ from discord.ext import commands
 import asyncio
 from math import ceil
 from pathlib import Path
+from typing import Optional
 
 from db.engine import init_db
+from db.models import CommandCategory
+from db.utils import DatabaseUtils
 from env import EnvConfig
 from hooks.register import register_hook
 
@@ -36,9 +39,13 @@ async def setup_bot() -> commands.Bot:
     # TEST command
     @client.command()
     async def ping(ctx: commands.Context) -> None:
-        await ctx.message.channel.send(
-            f"pong!\n> `Client Latency > {ceil(client.latency * 100)}ms`"
-        )
+        await ctx.reply(f"pong!\n> `Client Latency > {ceil(client.latency * 100)}ms`")
+
+        guild: Optional[discord.Guild] = ctx.guild
+        if guild:
+            await DatabaseUtils.increment_command_count(
+                str(ctx.guild.id), str(ctx.author.id), CommandCategory.MISC
+            )
 
     # load up cogs
     cogs_path = Path("src/cogs")

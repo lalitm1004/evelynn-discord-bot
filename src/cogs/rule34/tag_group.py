@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Set
 
 
 @dataclass
@@ -15,8 +15,8 @@ class TagGroup:
     @classmethod
     def from_list(
         cls,
-        whitelisted: List[str],
-        blacklisted: List[str],
+        whitelisted: List[str] | Set[str],
+        blacklisted: List[str] | Set[str],
         additional_key: Optional[str] = None,
     ) -> "TagGroup":
         whitelisted = [cls._normalize_tag(tag) for tag in whitelisted]
@@ -47,14 +47,14 @@ class TagGroup:
 
         return self.to_string() + additional_key
 
-    def append_to_whitelist(self, tags: List[str]) -> None:
+    def append_to_whitelist(self, tags: List[str] | Set[str]) -> None:
         if not tags:
             return
 
         normalized = {self._normalize_tag(tag) for tag in tags if tag.strip()}
         self.whitelisted = sorted(set(self.whitelisted).union(normalized))
 
-    def append_to_blacklist(self, tags: List[str]) -> None:
+    def append_to_blacklist(self, tags: List[str] | Set[str]) -> None:
         if not tags:
             return
 

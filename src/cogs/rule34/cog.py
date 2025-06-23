@@ -1,150 +1,179 @@
 import discord
 from discord.ext import commands
 
-from typing import Final, Optional, List
+from typing import Final, Optional
 
-from db.engine import get_session
-from db.models import Guild
 from cogs.rule34.api import Rule34API, TagGroup
-from cogs.rule34.utils import Rule34DatabaseUtils as DBUtils
+from cogs.rule34.utils import Rule34DatabaseUtils
+from db.models import CommandCategory
+from db.utils import DatabaseUtils
+from hooks.register import register_hook_command
+from utils.formatter import Formatter as Fmt
+from utils.general import GenUtils
 
 
 class Rule34Cog(commands.Cog):
-    RULE34_GREEN: Final = 0xAAE5A4
+    RULE34_GREEN: Final[int] = 0xAAE5A4
 
     def __init__(self, client: commands.Bot) -> None:
         self.client = client
         self.r34_api = Rule34API()
 
     async def cog_before_invoke(self, ctx: commands.Context) -> None:
+        await register_hook_command(ctx)
+
         guild: Optional[discord.Guild] = ctx.guild
         if guild is not None:
-            async with get_session() as session:
-                guild_config = await session.get(Guild, str(guild.id))
-                if guild_config is None or not guild_config.r34_enabled:
-                    raise commands.CheckFailure(
-                        "[ERROR] Rule34 is disabled for this guild."
-                    )
+            db_guild = await DatabaseUtils.fetch_or_create_guild(str(guild.id))
+            if not db_guild.r34_enabled:
+                raise commands.CheckFailure("Feature_RULE34 is DISABLED for this guild")
 
     async def cog_after_invoke(self, ctx: commands.Context) -> None:
         user_id = str(ctx.author.id)
         guild: Optional[discord.Guild] = ctx.guild
         if guild is not None:
             guild_id = str(guild.id)
-            DBUtils.increment_command_count(user_id, guild_id)
+            await DatabaseUtils.increment_command_count(
+                guild_id, user_id, CommandCategory.RULE34
+            )
 
-    @commands.group(aliases=["r34"])
+    @commands.group(name="rule34", aliases=["r34"], invoke_without_command=True)
     @commands.guild_only()
     @commands.is_nsfw()
-    async def rule34(self, ctx: commands.Context) -> None:
+    async def rule34_group(self, ctx: commands.Context) -> None:
         pass
 
-    @rule34.group(aliases=["blist"])
-    async def blacklist(self, ctx: commands.Context) -> None:
+    @rule34_group.group(aliases=["blist"])
+    async def blacklist_group(self, ctx: commands.Context) -> None:
         pass
 
-    @blacklist.command()
+    @blacklist_group.command()
     async def view(self, ctx: commands.Context) -> None:
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
+        guild_id, user_id = GenUtils.extract_guild_and_user_id(ctx)
 
-        user_blacklist = DBUtils.fetch_blacklist(user_id, guild_id)
-        blacklist_str = (
-            " ".join(user_blacklist) if len(user_blacklist) != 0 else "Empty"
+        blacklist = await Rule34DatabaseUtils.get_blacklist(guild_id, user_id)
+        blacklist = " ".join(blacklist) if len(blacklist) != 0 else "Empty"
+
+        r34_user_profile = await Rule34DatabaseUtils.fetch_or_create_r34_user_profile(
+            guild_id, user_id
         )
-        if len(blacklist_str) >= 1500:
-            blacklist_str = blacklist_str[:1501] + "..."
-
-        blacklist_enabled = DBUtils.is_blacklist_enabled(user_id, guild_id)
-
-        response = (
-            f"`Blacklist` - `{blacklist_str}`\n\n"
-            f"`Blacklist is {'ENABLED' if blacklist_enabled else 'DISABLED'}`"
+        blacklist_enabled = (
+            "Enabled" if r34_user_profile.blacklist_enabled else "Disabled"
         )
-        await ctx.reply(response)
 
-    @blacklist.command()
+        blacklist_embed = discord.Embed(
+            title=f"Rule34 Blacklist",
+            description=f"`Blacklist` - `{blacklist}`\n\n`Blacklist is {blacklist_enabled}`",
+            timestamp=ctx.message.created_at,
+            color=self.RULE34_GREEN,
+        )
+        blacklist_embed.set_footer(
+            text=ctx.author.display_name, icon_url=ctx.author.display_avatar
+        )
+
+        await ctx.reply(embed=blacklist_embed)
+
+    @blacklist_group.command()
     async def add(self, ctx: commands.Context, *, tags: str) -> None:
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
+        guild_id, user_id = GenUtils.extract_guild_and_user_id(ctx)
 
         tag_list = tags.strip().lower().replace(",", " ").split(" ")
-        tag_list = list(set([tag for tag in tag_list if tag.strip()]))
+        tag_list = [tag for tag in tag_list if tag.strip()]
 
-        success: List[str] = []
-        for tag in tag_list:
-            res = DBUtils.push_to_blacklist(user_id, guild_id, tag)
-            if res:
-                success.append(tag)
+        rejected = await Rule34DatabaseUtils.add_blacklist_tags(
+            guild_id, user_id, tag_list
+        )
 
         response = f"> **Given tag(s) have been added to your blacklist.**"
-        if len(tag_list) != len(success):
-            response = f"> **The following tag(s) have been added to your blacklist:**`{' '.join(success)}`**, the rest were duplicates.**"
+        if len(rejected) > 0:
+            response = f"> **The following tag(s) were already in your blacklist: **`{' '.join(rejected)}`**, the rest have been inserted.**"
 
         await ctx.reply(response)
 
-    @blacklist.command()
+    @blacklist_group.command()
     async def remove(self, ctx: commands.Context, *, tags: str) -> None:
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
+        guild_id, user_id = GenUtils.extract_guild_and_user_id(ctx)
 
         tag_list = tags.strip().lower().replace(",", " ").split(" ")
-        tag_list = list(set([tag for tag in tag_list if tag.strip()]))
+        tag_list = [tag for tag in tag_list if tag.strip()]
 
-        success: List[str] = []
-        for tag in tag_list:
-            res = DBUtils.pop_from_blacklist(user_id, guild_id, tag)
-            if res:
-                success.append(tag)
+        rejected = await Rule34DatabaseUtils.remove_blacklist_tags(
+            guild_id, user_id, tag_list
+        )
 
         response = f"> **Given tag(s) have been removed from your blacklist.**"
-        if len(tag_list) != len(success):
-            response = f"> **The following tag(s) have been removed from your blacklist:**`{' '.join(success)}`**, the rest did not exist.**"
+        if len(rejected) > 0:
+            response = f"> **The following tag(s) have were not present in your blacklist: **`{' '.join(rejected)}`**, the rest were removed.**"
 
         await ctx.reply(response)
 
-    @blacklist.command()
+    @blacklist_group.command()
     async def toggle(self, ctx: commands.Context) -> None:
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
+        guild_id, user_id = GenUtils.extract_guild_and_user_id(ctx)
 
-        new_state = DBUtils.toggle_user_blacklist(user_id, guild_id)
-        await ctx.reply(
-            f"> **Blacklist is now` {'`ENABLED`' if new_state else '`DISABLED`'}**"
+        r34_user_profile = await Rule34DatabaseUtils.fetch_or_create_r34_user_profile(
+            guild_id, user_id
+        )
+        new_state = not r34_user_profile.blacklist_enabled
+        await Rule34DatabaseUtils.update_r34_user_profile(
+            guild_id, user_id, blacklist_enabled=new_state
         )
 
-    @rule34.command()
-    async def random(self, ctx: commands.Context) -> None:
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
+        await ctx.reply(
+            f"> **Blacklist is now {'`ENABLED`' if new_state else '`DISABLED`'}**"
+        )
 
-        blacklist = DBUtils.fetch_blacklist(user_id, guild_id)
-        tags = TagGroup.from_list([], blacklist)
-
-        post = self.r34_api.search(tags)
+    @rule34_group.command()
+    async def latest(self, ctx: commands.Context) -> None:
+        post = self.r34_api.latest()
         if post is None:
             await ctx.reply(
-                f"> **An unforseen Error has occured. Please contact walmartPhilosopher immediately.**"
+                Fmt.error(
+                    "An unforseen Error has occured. Please contact walmartphilosopher immediately"
+                )
             )
             return
 
         await ctx.reply(post.get_output_string())
 
-    @rule34.command()
-    async def search(self, ctx: commands.Context, *, tags: str) -> None:
-        user_id = str(ctx.author.id)
-        guild_id = str(ctx.guild.id)
+    @rule34_group.command()
+    async def random(self, ctx: commands.Context) -> None:
+        guild_id, user_id = GenUtils.extract_guild_and_user_id(ctx)
 
-        blacklist = DBUtils.fetch_blacklist(user_id, guild_id)
-        tag_group = TagGroup.from_string(tags)
-        tag_group.append_to_blacklist(blacklist)
+        r34_user_profile = await Rule34DatabaseUtils.fetch_or_create_r34_user_profile(
+            guild_id, user_id
+        )
+        if r34_user_profile.blacklist_enabled:
+            blacklist = await Rule34DatabaseUtils.get_blacklist(guild_id, user_id)
+        else:
+            blacklist = []
+        tags = TagGroup.from_list([], blacklist, additional_key=guild_id)
 
-        conflicts = tag_group.get_conflicting_tags()
-        if len(conflicts) > 0:
+        post = self.r34_api.search(tags)
+        if post is None:
             await ctx.reply(
-                f"> **Error: Conflicting Tag(s). The following tag(s) are in your blacklist and search query at the same time:** `{' '.join(conflicts)}`**. Remove them from your blacklist or disable your blacklist to search for them.**"
+                Fmt.error(
+                    "An unforseen Error has occured. Please contact walmartphilosopher immediately"
+                )
             )
             return
+
+        await ctx.reply(post.get_output_string())
+
+    @rule34_group.command()
+    async def search(self, ctx: commands.Context, *, tags: str) -> None:
+        guild_id, user_id = GenUtils.extract_guild_and_user_id(ctx)
+
+        r34_user_profile = await Rule34DatabaseUtils.fetch_or_create_r34_user_profile(
+            guild_id, user_id
+        )
+        if r34_user_profile.blacklist_enabled:
+            blacklist = await Rule34DatabaseUtils.get_blacklist(guild_id, user_id)
+        else:
+            blacklist = []
+
+        tag_group = TagGroup.from_string(tags, additional_key=guild_id)
+        tag_group.append_to_blacklist(blacklist)
 
         post = self.r34_api.search(tag_group)
         if post is None:
@@ -153,25 +182,19 @@ class Rule34Cog(commands.Cog):
 
         await ctx.reply(post.get_output_string())
 
-    @rule34.command()
-    async def latest(self, ctx: commands.Context) -> None:
-        post = self.r34_api.latest()
-        if post is None:
-            await ctx.reply(
-                f"> **An unforseen Error has occured. Please contact walmartPhilosopher immediately.**"
-            )
-            return
-
-        await ctx.reply(post.get_output_string())
-
-    @rule34.error
+    @rule34_group.error
     async def rule34_error(self, ctx: commands.Context, error) -> None:
         if isinstance(error, commands.NSFWChannelRequired):
             await ctx.reply(
-                f"> **Error: Command can only be run on channels marked NSFW.**"
+                Fmt.warning("Feature_RULE34 can only be used in channels marked NSFW")
             )
         elif isinstance(error, commands.CheckFailure):
-            await ctx.reply(f"{error}")
+            await ctx.reply(Fmt.warning(str(error)))
+        elif isinstance(error, commands.NoPrivateMessage):
+            await ctx.reply(Fmt.warning("This command can only be used in guilds"))
+        else:
+            await ctx.reply(Fmt.error("An unexpected error occurred"))
+            raise error
 
 
 def setup(client: commands.Bot):
